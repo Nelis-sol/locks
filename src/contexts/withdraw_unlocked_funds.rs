@@ -1,23 +1,34 @@
 use crate::*;
 
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::associated_token;
+
+
 // Withdraw funds from the locker, for now only SOL - later SPL tokens are added
 #[derive(Accounts)]
-#[instruction(locker_name: String)]
+#[instruction(locker_name: String, amount: u64)]
 pub struct WithdrawUnlockedFunds<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(mut,
-        seeds = [b"locker".as_ref(), authority.key().as_ref(), locker_name.as_ref()],
-        bump,
-        constraint = locker.authority == *authority.key)]
+        seeds = [b"locker".as_ref(), authority.key().as_ref(), &locker_name.as_ref()],
+        constraint = locker.authority == *authority.key, 
+        bump)]
     pub locker: Account<'info, Locker>,
     #[account(address = system_program::ID)]
     pub system_program: Program<'info, System>,
+    /// Conditional accounts for SPL token withdrawal
+    #[account()]
+    pub token_mint_account_optional: Option<Account<'info, Mint>>,
+    #[account(mut, constraint = token_account_optional.to_account_info().owner == &token::ID)]
+    pub token_account_optional: Option<Account<'info, TokenAccount>>,
+    #[account(address = token::ID)]
+    pub token_program_optional: Option<Program<'info, Token>>,
 }
 
 impl<'info> WithdrawUnlockedFunds<'_> {
-    pub fn process(&mut self, amount: u32, token_mint: Option<Pubkey>) -> Result<()> {
-        let Self { authority, locker, .. } = self;
+    pub fn process(&mut self, locker_name: String, amount: u64) -> Result<()> {
+        let Self { authority, locker, system_program, token_account_optional, token_mint_account_optional, token_program_optional, .. } = self;
 
         // assert!(amount <= locker.unlocked_balance, "Insufficient unlocked balance");
         assert!(authority.key() == locker.authority, "Signer not authorized");
@@ -26,6 +37,9 @@ impl<'info> WithdrawUnlockedFunds<'_> {
         require!((amount > 0), LockerErrorCode::PayoutAmountNotPositive);
 
 
+        /// TODO: Only implemented available balance for $SOL, not yet for SPL tokens
+         
+        
         // Get total balance of the locker
         let mut available_balance = locker.get_lamports();
 
@@ -76,13 +90,37 @@ impl<'info> WithdrawUnlockedFunds<'_> {
         require!((transfer_amount <= available_balance), LockerErrorCode::PayoutAmountExceedsAvailableBalance);
 
 
-        // Check what token to withdraw
-        if token_mint.is_none() {
-            // It's a $SOL withdrawal
-            // Transfer funds from locker to authority / signer
-            **locker.to_account_info().try_borrow_mut_lamports()? -= transfer_amount;
-            **authority.to_account_info().try_borrow_mut_lamports()? += transfer_amount;
+        // Check if the deposit is a $SOL or SPL token deposit
+        // if the token_mint is None we assume a SOL deposit, otherwise SPL token deposit
+        if let Some(_token_mint_account) = token_mint_account_optional {
+            
+            // Unwrap the optional accounts which must contain addresses needed for the associated token account
+            let token_account = token_account_optional.as_ref().unwrap();
+            let token_program = token_program_optional.as_ref().unwrap();
 
+            // Transfer the withdrawal amount from the token account to the authority
+            let cpi_accounts = Transfer {
+                from: token_account.to_account_info(),
+                to: authority.to_account_info(),
+                authority: locker.to_account_info(),
+            };
+            let cpi_context = CpiContext::new(token_program.to_account_info(), cpi_accounts);
+            token::transfer(cpi_context, amount)?;
+        } else {
+            // Transfer SOL from the locker to the authority
+            invoke_signed(
+                &system_instruction::transfer(
+                    &locker.to_account_info().key,
+                    &authority.to_account_info().key,
+                    amount,
+                ),
+                &[
+                    locker.to_account_info().clone(),
+                    authority.to_account_info().clone(),
+                    system_program.to_account_info().clone(),
+                ],
+                &[&[b"locker".as_ref(), authority.key().as_ref(), &locker_name.as_ref(), &[locker.bump]]],
+            )?;
         }
         
         Ok(())

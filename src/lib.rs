@@ -3,6 +3,7 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_lang::solana_program::system_program;
 use anchor_lang::solana_program::program::{invoke, invoke_signed};
 
+
 use std::mem;
 use std::str::FromStr;
 use std::collections::HashSet;
@@ -38,12 +39,13 @@ pub mod pricelocker {
 
     /// Deposit to price locker
     pub fn deposit_funds(ctx: Context<DepositFunds>, _locker_name: String, amount: u32) -> Result<()> {
-        ctx.accounts.process(amount)
+        let transfer_amount: u64 = amount as u64;
+        ctx.accounts.process(transfer_amount)
     }
     
 
-    pub fn stake_funds(ctx: Context<StakeFunds>, _locker_name: String, amount: u32) -> Result<()> {
-        ctx.accounts.process(amount)
+    pub fn stake_funds(ctx: Context<CreateAndDelegateStake>, locker_name: String, lamports: u64) -> Result<()> {
+        ctx.accounts.process(locker_name, lamports)
     }
 
 
@@ -73,8 +75,9 @@ pub mod pricelocker {
     //     ctx.accounts.process(amount)
     // }
 
-    pub fn withdraw_unlocked_funds(ctx: Context<WithdrawUnlockedFunds>, _locker_name: String, amount: u32, token_mint: Option<Pubkey>) -> Result<()> {
-        ctx.accounts.process(amount, token_mint)
+    pub fn withdraw_unlocked_funds(ctx: Context<WithdrawUnlockedFunds>, locker_name: String, amount: u32) -> Result<()> {
+        let transfer_amount: u64 = amount as u64;
+        ctx.accounts.process(locker_name, transfer_amount)
     }
 
 
